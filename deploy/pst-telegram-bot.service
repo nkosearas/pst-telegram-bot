@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/pst-telegram-bot
-EnvironmentFile=/home/pi/pst-telegram-bot/.env
-ExecStart=/home/pi/pst-telegram-bot/venv/bin/python /home/pi/pst-telegram-bot/bot.py
+User=nkosearas
+WorkingDirectory=/home/nkosearas/pst-telegram-bot
+EnvironmentFile=/home/nkosearas/pst-telegram-bot/.env
+ExecStart=/home/nkosearas/pst-telegram-bot/venv/bin/python /home/nkosearas/pst-telegram-bot/bot.py
 Restart=on-failure
 RestartSec=5
 
