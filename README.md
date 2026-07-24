@@ -58,6 +58,45 @@ Reply `yes` to confirm the update, or `no` to cancel.
    this machine.
 8. Open your bot in Telegram and send `/start`, then try a real message.
 
+## Deploying on a Raspberry Pi (recommended for real use)
+
+Running this on your PC only works while your PC happens to be on. A Raspberry Pi
+left running at home/office is a better fit — it stays reachable, and `systemd` can
+keep the bot alive automatically (restarting it on crash or reboot).
+
+1. SSH into the Pi, then clone the repo:
+   ```
+   git clone https://github.com/nkosearas/pst-telegram-bot.git
+   cd pst-telegram-bot
+   ```
+2. Create a virtual environment and install dependencies (Raspberry Pi OS blocks
+   installing packages system-wide by default, so a venv is required):
+   ```
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   ```
+3. Create `.env` on the Pi (copy `.env.example`, fill in real values). This file is
+   git-ignored and never leaves the Pi.
+4. Install the systemd service:
+   ```
+   sudo cp deploy/pst-telegram-bot.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now pst-telegram-bot
+   ```
+   The service file assumes the repo lives at `/home/pi/pst-telegram-bot` and runs as
+   user `pi` — edit `deploy/pst-telegram-bot.service` first if your username or path
+   differs, then re-copy it and run `sudo systemctl daemon-reload`.
+5. Check it's running / view logs:
+   ```
+   sudo systemctl status pst-telegram-bot
+   journalctl -u pst-telegram-bot -f
+   ```
+6. After pulling code updates (`git pull`), restart the service:
+   ```
+   sudo systemctl restart pst-telegram-bot
+   ```
+
 ## Cost note
 
 Per DBS's pricing, each job is billed once per month it's touched by the API
