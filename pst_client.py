@@ -29,9 +29,15 @@ class PstClient:
                 "dbscode": self.dbs_code,
             },
         )
-        response.raise_for_status()
+        if not response.ok:
+            raise PstApiError(f"Token request failed ({response.status_code}): {response.text}")
+
         payload = response.json()
-        self._token = payload["token"]
+        token = payload.get("token") or payload.get("access_token")
+        if not token:
+            raise PstApiError(f"Token request succeeded but no token found in response: {payload}")
+
+        self._token = token
         self._token_expires_at = time.time() + float(payload.get("expires_in", 1200))
         return self._token
 
@@ -45,6 +51,14 @@ class PstClient:
         if not data.get("IsSuccess", True):
             raise PstApiError(data.get("TransactionErrors"))
         return data.get("Jobs", [])
+
+    def search_entities(self, **params):
+        response = requests.get(f"{self.base_url}/entities", headers=self._headers(), params=params)
+        response.raise_for_status()
+        data = response.json()
+        if not data.get("IsSuccess", True):
+            raise PstApiError(data.get("TransactionErrors"))
+        return data.get("Entities", [])
 
     def add_comment(self, job_number, comment_text, comment_datetime, is_attempt=True, is_status_report=True):
         body = {

@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+from locations import load_locations
 from message_parser import ParseError, parse_message
 from pst_client import PstApiError, PstClient
 
@@ -64,10 +65,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(str(exc))
         return
 
+    locations = load_locations()
+    address = locations.get(parsed["firm"].strip().lower())
+    if not address or address.startswith("REPLACE_WITH"):
+        await update.message.reply_text(
+            f"\"{parsed['firm']}\" isn't set up in locations.json yet.\n\n"
+            "Open a real job in WebPST for this location, copy the exact Party to be "
+            "Served street address, and add it to locations.json as:\n"
+            f'  "{parsed["firm"].strip().lower()}": "<that address>"\n\n'
+            "Nothing was updated."
+        )
+        return
+
     try:
         jobs = pst.search_jobs(
             ServerSerialNumber=SERVER_SERIAL_NUMBER,
-            ServeeFirmOrLastName=parsed["firm"],
+            ServeeAddress1=address,
             ServeeCity=parsed["city"],
             SearchPurpose="UnfinishedJobs",
         )
@@ -82,8 +95,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(jobs) != parsed["count"]:
         job_list = "\n".join(f"  #{j['JobNumber']}" for j in jobs) or "  (none)"
         await update.message.reply_text(
-            f"You said {parsed['count']} job(s), but I found {len(jobs)} open job(s) "
-            f"matching \"{parsed['firm']}, {parsed['city']}\":\n{job_list}\n\n"
+            f"You said {parsed['count']} job(s), but I found {len(jobs)} open, unfinished job(s) "
+            f"with a Party to be Served address matching \"{address}\", {parsed['city']}:\n{job_list}\n\n"
             "Nothing was updated. Double check and resend, or handle this one in WebPST directly."
         )
         return
