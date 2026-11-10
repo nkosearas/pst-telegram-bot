@@ -15,6 +15,9 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+# httpx logs every request URL at INFO, and Telegram URLs contain the bot token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 ALLOWED_USER_ID = int(os.environ["TELEGRAM_ALLOWED_USER_ID"])
 SERVER_SERIAL_NUMBER = int(os.environ["PST_SERVER_SERIAL_NUMBER"])

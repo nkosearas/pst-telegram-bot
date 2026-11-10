@@ -280,3 +280,10 @@ class ChatFlow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoTokenInLogs(unittest.TestCase):
+    def test_request_urls_not_logged(self):
+        import logging
+        self.assertGreaterEqual(logging.getLogger("httpx").getEffectiveLevel(), logging.WARNING)
+        self.assertGreaterEqual(logging.getLogger("httpcore").getEffectiveLevel(), logging.WARNING)
