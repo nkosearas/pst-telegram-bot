@@ -287,3 +287,15 @@ class NoTokenInLogs(unittest.TestCase):
         import logging
         self.assertGreaterEqual(logging.getLogger("httpx").getEffectiveLevel(), logging.WARNING)
         self.assertGreaterEqual(logging.getLogger("httpcore").getEffectiveLevel(), logging.WARNING)
+
+
+class CommentBoxes(unittest.TestCase):
+    def test_all_seven_boxes_checked(self):
+        from pst_client import PstClient
+        body = PstClient.comment_body(2026000542, "JANE DOE, INTAKE SPECIALIST", "11/10/2026 12:56 pm")
+        comment = body["Job"]["CreateComments"][0]
+        self.assertEqual(body["Job"]["JobNumber"], 2026000542)
+        self.assertEqual(comment["CommentText"], "JANE DOE, INTAKE SPECIALIST")
+        self.assertEqual(comment["CommentDateTime"], "11/10/2026 12:56 pm")
+        for box in ("IsAffidavit", "IsFieldSheet", "IsStatusReport", "IsInvoice", "IsDiligence", "IsAttempt", "IsReviewed"):
+            self.assertIs(comment[box], True, box)

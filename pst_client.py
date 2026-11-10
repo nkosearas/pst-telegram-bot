@@ -68,22 +68,19 @@ class PstClient:
             raise PstApiError(data.get("TransactionErrors"))
         return data.get("Comments", [])
 
-    def add_comment(self, job_number, comment_text, comment_datetime, is_attempt=True, is_status_report=True):
-        body = {
-            "Job": {
-                "JobNumber": job_number,
-                "CreateComments": [
-                    {
-                        "CommentDateTime": comment_datetime,
-                        "CommentText": comment_text,
-                        "IsAttempt": is_attempt,
-                        "IsStatusReport": is_status_report,
-                        "IsReviewed": True,
-                    }
-                ],
-            }
-        }
-        response = requests.put(f"{self.base_url}/jobs", headers=self._headers(), json=body)
+    # The seven boxes on a WebPST comment (Aff, FS, SR, Inv, Dil, Att, Rev).
+    # Nick wants all of them checked on every service comment the bot adds.
+    ALL_COMMENT_BOXES = ("IsAffidavit", "IsFieldSheet", "IsStatusReport", "IsInvoice", "IsDiligence", "IsAttempt", "IsReviewed")
+
+    @classmethod
+    def comment_body(cls, job_number, comment_text, comment_datetime):
+        comment = {"CommentDateTime": comment_datetime, "CommentText": comment_text}
+        comment.update({box: True for box in cls.ALL_COMMENT_BOXES})
+        return {"Job": {"JobNumber": job_number, "CreateComments": [comment]}}
+
+    def add_comment(self, job_number, comment_text, comment_datetime, **_ignored):
+        body = self.comment_body(job_number, comment_text, comment_datetime)
+        response = requests.put(f"{self.base_url}/jobs", headers=self._headers(), json=body, timeout=30)
         response.raise_for_status()
         data = response.json()
         if not data.get("IsSuccess", True):
