@@ -1,3 +1,6 @@
 python-telegram-bot>=21
 requests>=2.31
 python-dotenv>=1.0
+pillow>=10
+pillow-heif>=0.16
+tzdata

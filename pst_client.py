@@ -60,6 +60,14 @@ class PstClient:
             raise PstApiError(data.get("TransactionErrors"))
         return data.get("Entities", [])
 
+    def get_comments(self, job_number):
+        response = requests.get(f"{self.base_url}/jobs/{job_number}/comments", headers=self._headers(), timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        if not data.get("IsSuccess", True):
+            raise PstApiError(data.get("TransactionErrors"))
+        return data.get("Comments", [])
+
     def add_comment(self, job_number, comment_text, comment_datetime, is_attempt=True, is_status_report=True):
         body = {
             "Job": {

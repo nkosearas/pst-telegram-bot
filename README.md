@@ -15,7 +15,33 @@ so v1 is deliberately conservative:
   change the job's formal "done"/served status. Once you trust the matching, that can
   be added as a next step.
 
-## Message format
+## Photo + name (C T Corporation)
+
+After serving at C T Corporation, send the bot **the photo you took at the office**
+with the **name and title of the person served as the caption**:
+
+```
+JANE DOE, INTAKE SPECIALIST
+```
+
+- **Time of service** = when the photo was taken (from the photo's metadata).
+  Telegram strips that metadata from normal photos, so send it **as a File**
+  (paperclip → File → pick the photo). If you send a normal photo, the bot uses the
+  time you sent it and says so. iPhone HEIC files work.
+- **Jobs**: the bot lists your open (unfinished) jobs at C T Corporation System,
+  leaving out jobs that already have a service comment (served before, not closed
+  yet) and jobs PST received after the photo was taken. All listed jobs start ticked;
+  tap a job to leave it out, then tap **Add to N job(s)** (or reply `yes`). **Cancel**
+  (or `no`) writes nothing.
+- **What it writes** is the comment exactly as you'd type it in WebPST: the
+  name and title as the comment text, the service time as the comment time, marked
+  as an attempt and a status report (like your own comments). It doesn't close the job;
+  close it and make the proof of service in WebPST later.
+- No caption? The bot asks "Who did you serve?" and takes your next text as the name.
+
+Tests: `python -m unittest discover -s tests -v` (offline; fakes for Telegram and PST).
+
+## Text format (older, still works)
 
 ```
 served <count> at <firm>, <city> at <time> to <recipient name>, <recipient title>
