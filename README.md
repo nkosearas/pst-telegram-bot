@@ -28,11 +28,16 @@ JANE DOE, INTAKE SPECIALIST
   Telegram strips that metadata from normal photos, so send it **as a File**
   (paperclip → File → pick the photo). If you send a normal photo, the bot uses the
   time you sent it and says so. iPhone HEIC files work.
-- **Jobs**: the bot lists your open (unfinished) jobs at C T Corporation System,
-  leaving out jobs that already have a service comment (served before, not closed
-  yet) and jobs PST received after the photo was taken. All listed jobs start ticked;
-  tap a job to leave it out, then tap **Add to N job(s)** (or reply `yes`). **Cancel**
-  (or `no`) writes nothing.
+- **Jobs**: after the name, the bot asks which jobs get it and lists your open
+  (unfinished) C T Corporation System jobs by job number, **all selected**. Tap a job
+  to unselect it (tap again to put it back), then tap **Submit**. **Cancel** (or `no`)
+  writes nothing.
+- **How it knows a job is at C T Corporation**: it asks PST for your unfinished jobs
+  whose **Party to be Served address line 1** is "C T Corporation System" (PST
+  matches the start of the line), and also tries "CT Corporation System" in case a
+  job was typed without the space. It leaves out jobs that already have a service
+  comment (served before, not closed yet) and jobs PST received after the photo was
+  taken, and lists those separately as "Not included".
 - **What it writes** is the comment exactly as you'd type it in WebPST: the
   name and title as the comment text, the service time as the comment time, marked
   as an attempt and a status report (like your own comments). It doesn't close the job;

@@ -140,6 +140,27 @@ def eligible_jobs(jobs, comments_by_job, served_at):
     return eligible, skipped
 
 
+def address_variants(address):
+    """The CT address as typed both ways in PST: "C T Corporation System" and "CT Corporation System"."""
+    variants = [address]
+    squeezed = address.replace("C T ", "CT ", 1)
+    if squeezed != address:
+        variants.append(squeezed)
+    spaced = address.replace("CT ", "C T ", 1)
+    if spaced != address and spaced not in variants:
+        variants.append(spaced)
+    return variants
+
+
+def merge_jobs(*job_lists):
+    """One list, each job once, in job-number order."""
+    seen = {}
+    for jobs in job_lists:
+        for job in jobs:
+            seen.setdefault(job.get("JobNumber"), job)
+    return [seen[k] for k in sorted(seen, key=lambda n: n or 0)]
+
+
 def job_label(job):
     """Short label for a job button: number and party served."""
     name = job.get("ServeeLastFirstMiddle") or (job.get("PartyToBeServed") or {}).get("LastName") or ""

@@ -208,11 +208,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        jobs = pst.search_jobs(
-            ServerSerialNumber=SERVER_SERIAL_NUMBER,
-            ServeeAddress1=address,
-            SearchPurpose="UnfinishedJobs",
-        )
+        jobs = photo_service.merge_jobs(*[
+            pst.search_jobs(
+                ServerSerialNumber=SERVER_SERIAL_NUMBER,
+                ServeeAddress1=variant,
+                SearchPurpose="UnfinishedJobs",
+            )
+            for variant in photo_service.address_variants(address)
+        ])
         comments = {job["JobNumber"]: pst.get_comments(job["JobNumber"]) for job in jobs}
     except PstApiError as exc:
         await message.reply_text(f"PST API error: {exc}\nNothing was updated.")
@@ -257,11 +260,12 @@ def _photo_summary(pending):
                 "Send it as a File next time to use the photo's own time)")
     count = len(pending["selected"])
     lines = [
-        f"Service at {pending['address']}",
+        f"Served: {pending['recipient']}",
         f"Time: {when}",
-        f"Comment: {pending['recipient']}",
         "",
-        f"Will add it to {count} job(s). Tap a job to leave it out or put it back:",
+        f"Which jobs should get this? Your open {pending['address']} jobs are all selected. "
+        f"Tap a job to unselect it (tap again to put it back), then tap Submit. "
+        f"{count} selected now.",
     ]
     if pending["skipped"]:
         lines.append("")
@@ -277,7 +281,7 @@ def _photo_keyboard(pending):
         rows.append([InlineKeyboardButton(f"{mark} {photo_service.job_label(job)}"[:60], callback_data=f"t:{job['JobNumber']}")])
     count = len(pending["selected"])
     rows.append([
-        InlineKeyboardButton(f"Add to {count} job(s)", callback_data="ok"),
+        InlineKeyboardButton(f"Submit ({count})", callback_data="ok"),
         InlineKeyboardButton("Cancel", callback_data="x"),
     ])
     return InlineKeyboardMarkup(rows)

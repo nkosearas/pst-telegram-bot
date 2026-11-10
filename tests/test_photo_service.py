@@ -116,6 +116,14 @@ class Eligible(unittest.TestCase):
         self.assertEqual([j["JobNumber"] for j in eligible], [541])
         self.assertEqual({j["JobNumber"]: r for j, r in skipped}, {543: "already has a service comment", 545: "received after the photo was taken"})
 
+    def test_both_spellings(self):
+        self.assertEqual(photo_service.address_variants("C T Corporation System"), ["C T Corporation System", "CT Corporation System"])
+        self.assertEqual(photo_service.address_variants("CT Corporation System"), ["CT Corporation System", "C T Corporation System"])
+
+    def test_merge_keeps_each_job_once(self):
+        merged = photo_service.merge_jobs([{"JobNumber": 7}, {"JobNumber": 3}], [{"JobNumber": 3}, {"JobNumber": 9}])
+        self.assertEqual([j["JobNumber"] for j in merged], [3, 7, 9])
+
     def test_label(self):
         self.assertEqual(photo_service.job_label(JOBS[0]), "#541 Acme Widgets")
 
@@ -211,17 +219,21 @@ class ChatFlow(unittest.TestCase):
         run(bot.handle_photo(FakeUpdate(msg), None))
         text, markup = msg.replies[-1]
         self.assertIn("Tue 11/10 12:56 PM (from the photo)", text)
-        self.assertIn("Comment: JANE DOE, INTAKE SPECIALIST", text)
+        self.assertIn("Served: JANE DOE, INTAKE SPECIALIST", text)
+        self.assertIn("Which jobs should get this? Your open C T Corporation System jobs are all selected.", text)
         self.assertIn("#543 Gamma Holdings: already has a service comment", text)
         self.assertIn("#545 Late Order Inc.: received after the photo was taken", text)
-        self.assertEqual(buttons(markup), ["✅ #541 Acme Widgets", "✅ #546 Beta LLC", "Add to 2 job(s)", "Cancel"])
-        self.assertEqual(self.pst.searches[0], {"ServerSerialNumber": 4, "ServeeAddress1": "C T Corporation System", "SearchPurpose": "UnfinishedJobs"})
+        self.assertEqual(buttons(markup), ["✅ #541 Acme Widgets", "✅ #546 Beta LLC", "Submit (2)", "Cancel"])
+        self.assertEqual(self.pst.searches, [
+            {"ServerSerialNumber": 4, "ServeeAddress1": "C T Corporation System", "SearchPurpose": "UnfinishedJobs"},
+            {"ServerSerialNumber": 4, "ServeeAddress1": "CT Corporation System", "SearchPurpose": "UnfinishedJobs"},
+        ], "searches both ways the agent's name is typed in PST")
         self.assertEqual(self.pst.added, [], "nothing written before confirming")
 
         # Leave #546 out, then confirm.
         q = FakeQuery("t:546", msg)
         run(bot.handle_photo_button(FakeUpdate(query=q), None))
-        self.assertEqual(buttons(q.edits[-1][1])[1:3], ["⬜ #546 Beta LLC", "Add to 1 job(s)"])
+        self.assertEqual(buttons(q.edits[-1][1])[1:3], ["⬜ #546 Beta LLC", "Submit (1)"])
         q = FakeQuery("ok", msg)
         run(bot.handle_photo_button(FakeUpdate(query=q), None))
         self.assertEqual(self.pst.added, [(541, "JANE DOE, INTAKE SPECIALIST", "11/10/2026 12:56 pm", True, True)])
