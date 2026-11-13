@@ -262,9 +262,12 @@ def _photo_summary(pending):
         when = (f"{photo_service.friendly_time(served_at)} (when you sent it; the photo had no date. "
                 "Send it as a File next time to use the photo's own time)")
     count = len(pending["selected"])
+    first, last = photo_service.split_name(pending["recipient"])
     lines = [
         f"Served: {pending['recipient']}",
         f"Time: {when}",
+        f"Served person entry: First \"{first}\", Last \"{last}\", Intake Specialist, "
+        "CORPORATE - REGISTERED AGENT",
         "",
         f"Which jobs should get this? Your open {pending['address']} jobs are all selected. "
         f"Tap a job to unselect it (tap again to put it back), then tap Submit. "
@@ -333,14 +336,18 @@ async def _apply_photo_service(chat_id, reply):
         await reply("No jobs selected. Nothing was updated.")
         return
     when = photo_service.pst_datetime(pending["served_at"])
-    updated, failed = [], []
+    updated, failed, comment_only = [], [], []
     for job in pending["jobs"]:
         number = job["JobNumber"]
         if number not in pending["selected"]:
             continue
         try:
-            pst.add_comment(number, pending["recipient"], when, is_attempt=True, is_status_report=True)
+            servees = pst.get_servees(number)
+            body, added_person = photo_service.service_update_body(number, pending["recipient"], when, pending["recipient"], servees)
+            pst.update_job(body)
             updated.append(number)
+            if not added_person:
+                comment_only.append(number)
         except PstApiError as exc:
             failed.append((number, str(exc)))
         except Exception:
@@ -348,7 +355,14 @@ async def _apply_photo_service(chat_id, reply):
             failed.append((number, "unexpected error"))
     lines = []
     if updated:
+        first, last = photo_service.split_name(pending["recipient"])
         lines.append(f"Added \"{pending['recipient']}\" at {when} to: " + ", ".join(f"#{n}" for n in updated))
+        with_person = [n for n in updated if n not in comment_only]
+        if with_person:
+            lines.append(f"Served person {first} {last} (Intake Specialist, CORPORATE - REGISTERED AGENT) "
+                         "added on: " + ", ".join(f"#{n}" for n in with_person))
+        if comment_only:
+            lines.append("Comment only (job already has a served person, or no name): " + ", ".join(f"#{n}" for n in comment_only))
         lines.append("Close the job(s) and make the proof in WebPST when you're back at your computer.")
     if failed:
         lines.append("FAILED (not updated): " + ", ".join(f"#{n} ({err})" for n, err in failed))

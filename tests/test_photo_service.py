@@ -148,6 +148,18 @@ class FakePst:
     def add_comment(self, number, text, when, is_attempt=True, is_status_report=True):
         self.added.append((number, text, when, is_attempt, is_status_report))
 
+    servees = {}
+
+    def get_servees(self, number):
+        return self.servees.get(number, [{"ID": f"party-{number}", "IsPartyToBeServed": True, "PartyType": "Corporation",
+                                          "LastName": "Acme Widgets", "Address1": "C T Corporation System", "ServeeStatus": ""}])
+
+    def update_job(self, body):
+        self.bodies = getattr(self, "bodies", []) + [body]
+        job = body["Job"]
+        comment = job["CreateComments"][0]
+        self.added.append((job["JobNumber"], comment["CommentText"], comment["CommentDateTime"], comment["IsAttempt"], comment["IsStatusReport"]))
+
 
 class FakeFile:
     def __init__(self, data):
@@ -238,6 +250,10 @@ class ChatFlow(unittest.TestCase):
         run(bot.handle_photo_button(FakeUpdate(query=q), None))
         self.assertEqual(self.pst.added, [(541, "JANE DOE, INTAKE SPECIALIST", "11/10/2026 12:56 pm", True, True)])
         self.assertIn("to: #541", msg.replies[-1][0])
+        self.assertIn("Served person Jane Doe (Intake Specialist, CORPORATE - REGISTERED AGENT) added on: #541", msg.replies[-1][0])
+        job = self.pst.bodies[0]["Job"]
+        self.assertEqual(job["CreateServeeDetails"][0]["FirstName"], "Jane")
+        self.assertEqual(job["PartyToBeServed"]["ServeeStatus"], "Ignore")
         self.assertNotIn(5, bot.photo_pending)
 
     def test_compressed_photo_uses_send_time_and_asks_for_name(self):
@@ -280,6 +296,56 @@ class ChatFlow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServedPerson(unittest.TestCase):
+    """The servee entry copies the one Nick made by hand with + ADD ANOTHER in WebPST."""
+
+    def test_split_name(self):
+        self.assertEqual(photo_service.split_name("PAT Q EXAMPLE, INTAKE SPECIALIST"), ("Pat", "Q Example"))
+        self.assertEqual(photo_service.split_name("jane o'neil-smith"), ("Jane", "O'Neil-Smith"))
+        self.assertEqual(photo_service.split_name("Jo McTest, Intake"), ("Jo", "McTest"), "mixed case kept as typed")
+        self.assertEqual(photo_service.split_name("Prince"), ("Prince", ""))
+        self.assertEqual(photo_service.split_name(""), ("", ""))
+
+    def test_entry_matches_webpst(self):
+        servees = [{"ID": "abc", "IsPartyToBeServed": True, "PartyType": "Corporation", "FirstName": "",
+                    "LastName": "ACME WIDGETS, INC.", "AddressType": "Other", "Address1": "C T Corporation System",
+                    "Address2": "330 N Brand Blvd", "City": "Glendale", "State": "CA", "Zip": "91203",
+                    "County": "Los Angeles", "Relationship": "", "ServeeStatus": ""}]
+        body, added = photo_service.service_update_body(2026000999, "PAT EXAMPLE, INTAKE SPECIALIST",
+                                                        "11/12/2026 12:54 pm", "PAT EXAMPLE, INTAKE SPECIALIST", servees)
+        self.assertTrue(added)
+        job = body["Job"]
+        self.assertEqual(job["CreateComments"][0]["CommentText"], "PAT EXAMPLE, INTAKE SPECIALIST")
+        self.assertEqual(job["CreateServeeDetails"], [{
+            "IsActualService": True, "IsRepresentativeToBeServed": False, "PartyType": "NaturalPerson",
+            "FirstName": "Pat", "LastName": "Example", "Relationship": "Intake Specialist", "ServeeStatus": "Served",
+            "ServiceDetails": {"ServedDateTime": "11/12/2026 12:54 pm", "TypeServiceSerialNumber": 9},
+            "AddressType": "Work", "Address1": "C T Corporation System", "Address2": "330 N Brand Blvd",
+            "City": "Glendale", "State": "CA", "Zip": "91203", "County": "Los Angeles",
+        }])
+        party = job["PartyToBeServed"]
+        self.assertEqual(party["ID"], "abc")
+        self.assertEqual(party["ServeeStatus"], "Ignore")
+        self.assertEqual(party["LastName"], "ACME WIDGETS, INC.", "existing party fields are sent back unchanged")
+        self.assertEqual(party["Address2"], "330 N Brand Blvd")
+        self.assertEqual(party["PartyType"], "Corporation")
+
+    def test_no_second_served_person(self):
+        servees = [{"ID": "abc", "IsPartyToBeServed": True, "ServeeStatus": "Ignore"},
+                   {"ID": "def", "IsActualService": True, "FirstName": "Someone"}]
+        body, added = photo_service.service_update_body(1, "PAT EXAMPLE", "11/12/2026 12:54 pm", "PAT EXAMPLE", servees)
+        self.assertFalse(added)
+        self.assertNotIn("CreateServeeDetails", body["Job"])
+        self.assertNotIn("PartyToBeServed", body["Job"])
+        self.assertIn("CreateComments", body["Job"], "the comment is still added")
+
+    def test_party_already_ignored_left_alone(self):
+        servees = [{"ID": "abc", "IsPartyToBeServed": True, "ServeeStatus": "Ignore"}]
+        body, added = photo_service.service_update_body(1, "PAT EXAMPLE", "11/12/2026 12:54 pm", "PAT EXAMPLE", servees)
+        self.assertTrue(added)
+        self.assertNotIn("PartyToBeServed", body["Job"])
 
 
 class NoTokenInLogs(unittest.TestCase):

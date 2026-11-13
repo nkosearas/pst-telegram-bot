@@ -161,6 +161,116 @@ def merge_jobs(*job_lists):
     return [seen[k] for k in sorted(seen, key=lambda n: n or 0)]
 
 
+# ---------------------------------------------------------------- served person entry
+#
+# Copied from the entry Nick made by hand in WebPST (+ ADD ANOTHER) on a C T Corporation
+# job: a Natural Person, "Intake Specialist", at C T's Glendale office, marked as the
+# actual service, Served, with the service date/time and type CORPORATE - REGISTERED
+# AGENT. The Party to be Served (the company) is set to Ignore.
+
+INTAKE_RELATIONSHIP = "Intake Specialist"
+TYPE_SERVICE_CORPORATE_REGISTERED_AGENT = 9   # "CORPORATE - REGISTERED AGENT" in Nick's PST
+CT_OFFICE = {
+    "AddressType": "Work",
+    "Address1": "C T Corporation System",
+    "Address2": "330 N Brand Blvd",
+    "City": "Glendale",
+    "State": "CA",
+    "Zip": "91203",
+    "County": "Los Angeles",
+}
+
+
+def split_name(recipient):
+    """("Pat", "Q Example") from "PAT Q EXAMPLE, INTAKE SPECIALIST".
+
+    The name is everything before the first comma; the first word is the first name and
+    the rest is the last name. ALL CAPS (or all lower case) names become Title Case, the
+    way Nick types them in WebPST; mixed-case names are kept exactly as typed.
+    """
+    name = " ".join((recipient or "").split(",")[0].split())
+    if name and (name.isupper() or name.islower()):
+        name = " ".join(_title_word(word) for word in name.split())
+    words = name.split(" ", 1) if name else []
+    if not words:
+        return "", ""
+    return words[0], (words[1] if len(words) > 1 else "")
+
+
+def _title_word(word):
+    # "o'brien" -> "O'Brien", "mary-jo" -> "Mary-Jo"
+    out, upper_next = [], True
+    for ch in word.lower():
+        out.append(ch.upper() if upper_next else ch)
+        upper_next = ch in "-'"
+    return "".join(out)
+
+
+def served_person(first_name, last_name, served_datetime):
+    """The new servee entry for the person served (CreateServeeDetailModel)."""
+    entry = {
+        "IsActualService": True,
+        "IsRepresentativeToBeServed": False,
+        "PartyType": "NaturalPerson",
+        "FirstName": first_name,
+        "LastName": last_name,
+        "Relationship": INTAKE_RELATIONSHIP,
+        "ServeeStatus": "Served",
+        "ServiceDetails": {
+            "ServedDateTime": served_datetime,
+            "TypeServiceSerialNumber": TYPE_SERVICE_CORPORATE_REGISTERED_AGENT,
+        },
+    }
+    entry.update(CT_OFFICE)
+    return entry
+
+
+def has_actual_service(servees):
+    """True if a job already has a servee marked as the actual service."""
+    return any(s.get("IsActualService") for s in servees or [])
+
+
+def party_to_be_served(servees):
+    for s in servees or []:
+        if s.get("IsPartyToBeServed"):
+            return s
+    return None
+
+
+_PARTY_FIELDS = ("PartyType", "Prefix", "FirstName", "LastName", "Suffix", "AddressType", "Address1",
+                 "Address2", "City", "State", "Zip", "Relationship", "County",
+                 "IsRepresentativeToBeServed", "IsActualService")
+
+
+def _party_type_enum(value):
+    return (value or "").replace(" ", "") or "NotSpecified"
+
+
+def service_update_body(job_number, comment_text, served_datetime, recipient, servees):
+    """One PUT for a job: the comment, plus (unless the job already has one) the served
+    person with the service details, and the Party to be Served set to Ignore.
+
+    Returns (body, added_person). The Party to be Served is sent back with all of its
+    existing fields so nothing on it is blanked; only its status changes.
+    """
+    from pst_client import PstClient
+    body = PstClient.comment_body(job_number, comment_text, served_datetime)
+    if has_actual_service(servees):
+        return body, False
+    first, last = split_name(recipient)
+    if not first:
+        return body, False
+    job = body["Job"]
+    job["CreateServeeDetails"] = [served_person(first, last, served_datetime)]
+    party = party_to_be_served(servees)
+    if party and party.get("ID") and party.get("ServeeStatus") != "Ignore":
+        update = {"ID": party["ID"], "ServeeStatus": "Ignore"}
+        update.update({k: party[k] for k in _PARTY_FIELDS if k in party and party[k] is not None})
+        update["PartyType"] = _party_type_enum(party.get("PartyType"))
+        job["PartyToBeServed"] = update
+    return body, True
+
+
 def job_label(job):
     """Short label for a job button: number and party served."""
     name = job.get("ServeeLastFirstMiddle") or (job.get("PartyToBeServed") or {}).get("LastName") or ""

@@ -78,8 +78,21 @@ class PstClient:
         comment.update({box: True for box in cls.ALL_COMMENT_BOXES})
         return {"Job": {"JobNumber": job_number, "CreateComments": [comment]}}
 
+    def get_servees(self, job_number):
+        """Every servee entry on a job (Party to be Served first), with service details."""
+        response = requests.get(f"{self.base_url}/jobs/{job_number}/ServeeDetails", headers=self._headers(), timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        if not data.get("IsSuccess", True):
+            raise PstApiError(data.get("TransactionErrors"))
+        return data.get("Servees") or data.get("ServeeDetails") or []
+
     def add_comment(self, job_number, comment_text, comment_datetime, **_ignored):
         body = self.comment_body(job_number, comment_text, comment_datetime)
+        return self.update_job(body)
+
+    def update_job(self, body):
+        """PUT /jobs with an UpdateJobModel body ({"Job": {...}})."""
         response = requests.put(f"{self.base_url}/jobs", headers=self._headers(), json=body, timeout=30)
         response.raise_for_status()
         data = response.json()
