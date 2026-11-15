@@ -9,7 +9,7 @@ User=nkosearas
 WorkingDirectory=/home/nkosearas/pst-telegram-bot
 EnvironmentFile=/home/nkosearas/pst-telegram-bot/.env
 ExecStart=/home/nkosearas/pst-telegram-bot/venv/bin/python /home/nkosearas/pst-telegram-bot/bot.py
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]

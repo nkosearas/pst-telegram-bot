@@ -28,9 +28,9 @@ def _read(path, default):
         return default
 
 
-def load(path=AGENTS_FILE):
+def load(path=None):
     """{"updated": "YYYY-MM-DD" or "", "names": [...]}; empty when the file is missing."""
-    data = _read(path, {})
+    data = _read(path or AGENTS_FILE, {})
     names = [" ".join(str(n).split()) for n in data.get("names", []) if str(n).strip()]
     seen, unique = set(), []
     for name in names:
@@ -45,12 +45,13 @@ def ordered(names, usage):
     return sorted(names, key=lambda n: (-int(usage.get(n.upper(), 0)), n.upper()))
 
 
-def load_usage(path=USAGE_FILE):
-    data = _read(path, {})
+def load_usage(path=None):
+    data = _read(path or USAGE_FILE, {})
     return data if isinstance(data, dict) else {}
 
 
-def record_pick(name, path=USAGE_FILE):
+def record_pick(name, path=None):
+    path = path or USAGE_FILE
     usage = load_usage(path)
     usage[name.upper()] = int(usage.get(name.upper(), 0)) + 1
     tmp = path + ".tmp"

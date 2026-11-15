@@ -26,6 +26,10 @@ _DATETIME = 306
 
 DEFAULT_LOCATION = "ct corporation"
 
+# Jobs PST received after the photo was taken are shown unticked, not hidden: the
+# received time can be wrong (it was 8 hours late on website jobs until plugin 1.6.9).
+LATE_REASON = "received after the photo was taken"
+
 
 class NoRecipientError(ValueError):
     pass
@@ -134,7 +138,7 @@ def eligible_jobs(jobs, comments_by_job, served_at):
             continue
         received = parse_pst_datetime(job.get("ReceivedDateTime"))
         if received and served_at and received > served_at:
-            skipped.append((job, "received after the photo was taken"))
+            skipped.append((job, LATE_REASON))
             continue
         eligible.append(job)
     return eligible, skipped

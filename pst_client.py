@@ -2,6 +2,10 @@ import time
 
 import requests
 
+# Every PST call has a time limit. Without one, a stalled connection would freeze the
+# whole bot (it handles one message at a time) until someone restarted it.
+TIMEOUT = 30
+
 
 class PstApiError(Exception):
     pass
@@ -28,14 +32,15 @@ class PstClient:
                 "apipassword": self.api_password,
                 "dbscode": self.dbs_code,
             },
+            timeout=TIMEOUT,
         )
         if not response.ok:
-            raise PstApiError(f"Token request failed ({response.status_code}): {response.text}")
+            raise PstApiError(f"Token request failed ({response.status_code}): {response.text[:200]}")
 
         payload = response.json()
         token = payload.get("token") or payload.get("access_token")
         if not token:
-            raise PstApiError(f"Token request succeeded but no token found in response: {payload}")
+            raise PstApiError("Token request succeeded but no token was in the response.")
 
         self._token = token
         self._token_expires_at = time.time() + float(payload.get("expires_in", 1200))
@@ -44,29 +49,39 @@ class PstClient:
     def _headers(self):
         return {"Authorization": f"Bearer {self._get_token()}"}
 
+    def _request(self, method, path, **kwargs):
+        """One PST call, returning the decoded body.
+
+        If PST says the sign-in is no longer valid (401), sign in again and retry once.
+        Network trouble and bad answers become PstApiError, so Nick always gets a
+        message that says PST was the problem.
+        """
+        url = f"{self.base_url}{path}"
+        try:
+            response = requests.request(method, url, headers=self._headers(), timeout=TIMEOUT, **kwargs)
+            if response.status_code == 401:
+                self._token = None
+                response = requests.request(method, url, headers=self._headers(), timeout=TIMEOUT, **kwargs)
+        except requests.RequestException as exc:
+            raise PstApiError(f"could not reach PST ({type(exc).__name__})") from exc
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise PstApiError(f"PST gave no usable answer (HTTP {response.status_code})")
+        if not response.ok or not data.get("IsSuccess", True):
+            raise PstApiError(data.get("TransactionErrors") or f"HTTP {response.status_code}")
+        return data
+
     def search_jobs(self, **params):
-        response = requests.get(f"{self.base_url}/jobs", headers=self._headers(), params=params)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("IsSuccess", True):
-            raise PstApiError(data.get("TransactionErrors"))
-        return data.get("Jobs", [])
+        return self._request("GET", "/jobs", params=params).get("Jobs", [])
 
     def search_entities(self, **params):
-        response = requests.get(f"{self.base_url}/entities", headers=self._headers(), params=params)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("IsSuccess", True):
-            raise PstApiError(data.get("TransactionErrors"))
-        return data.get("Entities", [])
+        return self._request("GET", "/entities", params=params).get("Entities", [])
 
     def get_comments(self, job_number):
-        response = requests.get(f"{self.base_url}/jobs/{job_number}/comments", headers=self._headers(), timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("IsSuccess", True):
-            raise PstApiError(data.get("TransactionErrors"))
-        return data.get("Comments", [])
+        return self._request("GET", f"/jobs/{job_number}/comments").get("Comments", [])
 
     # The seven boxes on a WebPST comment (Aff, FS, SR, Inv, Dil, Att, Rev).
     # Nick wants all of them checked on every service comment the bot adds.
@@ -80,12 +95,8 @@ class PstClient:
 
     def get_servees(self, job_number):
         """Every servee entry on a job (Party to be Served first), with service details."""
-        response = requests.get(f"{self.base_url}/jobs/{job_number}/ServeeDetails", headers=self._headers(), timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("IsSuccess", True):
-            raise PstApiError(data.get("TransactionErrors"))
-        return data.get("Servees") or data.get("ServeeDetails") or []
+        data = self._request("GET", f"/jobs/{job_number}/ServeeDetails")
+        return data.get("ServeeDetails") or data.get("Servees") or []
 
     def add_comment(self, job_number, comment_text, comment_datetime, **_ignored):
         body = self.comment_body(job_number, comment_text, comment_datetime)
@@ -93,9 +104,4 @@ class PstClient:
 
     def update_job(self, body):
         """PUT /jobs with an UpdateJobModel body ({"Job": {...}})."""
-        response = requests.put(f"{self.base_url}/jobs", headers=self._headers(), json=body, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get("IsSuccess", True):
-            raise PstApiError(data.get("TransactionErrors"))
-        return data
+        return self._request("PUT", "/jobs", json=body)

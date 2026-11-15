@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -37,6 +38,19 @@ pending_confirmations = {}
 #  "served_at": datetime, "time_from_photo": bool, "recipient": str or None, "address": str}
 photo_pending = {}
 
+# A photo that was never submitted is forgotten after this long, so a "yes" typed
+# hours later can't apply an old photo to that day's job list.
+PHOTO_PENDING_SECONDS = 2 * 60 * 60
+YES_WORDS = ("yes", "y", "confirm", "submit")
+
+
+def _current_photo(chat_id):
+    pending = photo_pending.get(chat_id)
+    if pending is not None and time.time() - pending.get("created", 0) > PHOTO_PENDING_SECONDS:
+        photo_pending.pop(chat_id, None)
+        return None
+    return pending
+
 
 def _is_authorized(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == ALLOWED_USER_ID
@@ -67,7 +81,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     chat_id = update.effective_chat.id
 
-    photo = photo_pending.get(chat_id)
+    photo = _current_photo(chat_id)
     if photo is not None:
         if text.lower() in ("no", "n", "cancel"):
             photo_pending.pop(chat_id, None)
@@ -81,11 +95,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             await _show_photo_summary(chat_id, update.message.reply_text)
             return
-        if text.lower() in ("yes", "y", "confirm"):
+        if text.lower() in YES_WORDS:
             await _apply_photo_service(chat_id, update.message.reply_text)
             return
+        # A name is already chosen and Nick types something else: a typed name always
+        # overrides the picked one. (The old "served N at ..." format still goes through.)
+        try:
+            parse_message(text)
+        except ParseError:
+            if len(text.replace(",", " ").split()) < 2:
+                await update.message.reply_text(
+                    "A photo is waiting. Tap Submit to finish, or Cancel. "
+                    "To change who was served, type the full name and title.")
+                return
+            try:
+                photo["recipient"] = photo_service.parse_recipient(text)
+            except photo_service.NoRecipientError as exc:
+                await update.message.reply_text(str(exc))
+                return
+            await _show_photo_summary(chat_id, update.message.reply_text)
+            return
 
-    if text.lower() in ("yes", "y", "confirm"):
+    if text.lower() in YES_WORDS:
         await _confirm_and_update(chat_id, update)
         return
 
@@ -137,6 +168,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     pending_confirmations[chat_id] = {"jobs": jobs, "parsed": parsed}
+    photo_pending.pop(chat_id, None)
     job_list = "\n".join(f"  #{j['JobNumber']} — {j.get('ServeeLastFirstMiddle', '')}" for j in jobs)
     await update.message.reply_text(
         f"Found {len(jobs)} job(s) at {parsed['firm']}, {parsed['city']}:\n{job_list}\n\n"
@@ -232,15 +264,19 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     eligible, skipped = photo_service.eligible_jobs(jobs, comments, served_at)
-    if not eligible:
+    late = [job for job, reason in skipped if reason == photo_service.LATE_REASON]
+    skipped = [(job, reason) for job, reason in skipped if reason != photo_service.LATE_REASON]
+    if not eligible and not late:
         lines = [f"No open jobs at {address} are waiting for service. Nothing was updated."]
         lines += [f"  {photo_service.job_label(job)}: {reason}" for job, reason in skipped]
         await message.reply_text("\n".join(lines))
         return
 
     photo_pending[chat_id] = {
-        "jobs": eligible,
+        "created": time.time(),
+        "jobs": photo_service.merge_jobs(eligible, late),
         "selected": {job["JobNumber"] for job in eligible},
+        "late": [job["JobNumber"] for job in late],
         "skipped": skipped,
         "served_at": served_at,
         "time_from_photo": taken_at is not None,
@@ -260,7 +296,14 @@ def _name_keyboard(names):
     """Two names per row; callback "n:<index>" into the names shown."""
     rows, row = [], []
     for i, name in enumerate(names):
-        row.append(InlineKeyboardButton(name.title()[:30], callback_data=f"n:{i}"))
+        button = InlineKeyboardButton(name.title()[:40], callback_data=f"n:{i}")
+        if len(name) > 16:  # a long name would be cut off in a half-width button
+            if row:
+                rows.append(row)
+                row = []
+            rows.append([button])
+            continue
+        row.append(button)
         if len(row) == 2:
             rows.append(row)
             row = []
@@ -322,6 +365,10 @@ def _photo_summary(pending):
         f"Tap a job to unselect it (tap again to put it back), then tap Submit. "
         f"{count} selected now.",
     ]
+    if pending.get("late"):
+        lines.append("")
+        lines.append("Not ticked: " + ", ".join(f"#{n}" for n in pending["late"])
+                     + " came into PST after the photo was taken. Tap to include if you did serve it.")
     if pending["skipped"]:
         lines.append("")
         lines.append("Not included:")
@@ -353,7 +400,7 @@ async def handle_photo_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("Not authorized.")
         return
     chat_id = update.effective_chat.id
-    pending = photo_pending.get(chat_id)
+    pending = _current_photo(chat_id)
     data = query.data or ""
     if pending is not None and pending["recipient"] is None and data.startswith("n:"):
         names = pending.get("names") or []
@@ -436,9 +483,23 @@ async def _apply_photo_service(chat_id, reply):
     await reply("\n".join(lines) if lines else "Nothing was updated.")
 
 
+async def on_error(update, context):
+    """Without this, an unexpected error is only logged and Nick sees silence."""
+    logger.error("Unhandled error: %s", type(context.error).__name__, exc_info=context.error)
+    try:
+        if isinstance(update, Update) and update.effective_chat and _is_authorized(update):
+            await context.bot.send_message(
+                update.effective_chat.id,
+                "Something went wrong on my side. Before sending it again, check the job in WebPST: "
+                "I can't be sure what was saved.")
+    except Exception:
+        pass
+
+
 def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).build()
+    app.add_error_handler(on_error)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("names", names_command))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE | filters.Document.FileExtension("heic"), handle_photo))

@@ -4,7 +4,9 @@ Run:  python -m unittest discover -s tests -v
 """
 import asyncio
 import io
+import json
 import os
+import tempfile
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -23,6 +25,7 @@ os.environ.update({
 
 from PIL import Image  # noqa: E402
 
+import agents  # noqa: E402
 import photo_service  # noqa: E402
 from photo_service import PACIFIC  # noqa: E402
 
@@ -225,6 +228,60 @@ class ChatFlow(unittest.TestCase):
         bot.pst = self.pst
         bot.photo_pending.clear()
         bot.pending_confirmations.clear()
+        # No name list unless a test makes one: the real one on the Pi must never leak into tests.
+        self.dir = tempfile.mkdtemp()
+        agents.AGENTS_FILE = os.path.join(self.dir, "ct_agents.json")
+        agents.USAGE_FILE = os.path.join(self.dir, "ct_agents_usage.json")
+
+    def names(self, *names):
+        with open(agents.AGENTS_FILE, "w", encoding="utf-8") as fh:
+            json.dump({"updated": "2026-11-10", "names": list(names)}, fh)
+
+    def test_pick_the_name_from_the_list(self):
+        self.names("PAT EXAMPLE", "LEE SAMPLE-TESTCASE LONGNAME", "AMY TWO")
+        msg = FakeMessage(document=FakeMedia(jpeg("2026:11:10 12:56:31")))  # no caption
+        run(bot.handle_photo(FakeUpdate(msg), None))
+        text, markup = msg.replies[-1]
+        self.assertIn("Tap a name", text)
+        self.assertEqual([[b.text for b in row] for row in markup.inline_keyboard],
+                         [["Amy Two"], ["Lee Sample-Testcase Longname"], ["Pat Example"], ["Cancel"]],
+                         "alphabetical; a long name gets its own row")
+        q = FakeQuery("n:2", msg)   # third in the order shown: Pat Example
+        run(bot.handle_photo_button(FakeUpdate(query=q), None))
+        self.assertEqual(bot.photo_pending[5]["recipient"], "PAT EXAMPLE, INTAKE SPECIALIST")
+        self.assertIn('Served person entry: First "Pat", Last "Example"', msg.replies[-1][0])
+        # Next photo: the picked name now comes first.
+        run(bot.handle_photo(FakeUpdate(msg), None))
+        self.assertEqual(msg.replies[-1][1].inline_keyboard[0][0].text, "Pat Example")
+
+    def test_typed_name_overrides_the_picked_one(self):
+        self.names("PAT EXAMPLE")
+        msg = FakeMessage(document=FakeMedia(jpeg("2026:11:10 12:56:31")))
+        run(bot.handle_photo(FakeUpdate(msg), None))
+        run(bot.handle_photo_button(FakeUpdate(query=FakeQuery("n:0", msg)), None))
+        typed = FakeMessage(text="Robin Other, Receptionist")
+        run(bot.handle_message(FakeUpdate(typed), None))
+        self.assertIn("Served: Robin Other, Receptionist", typed.replies[-1][0])
+        one_word = FakeMessage(text="thanks")
+        run(bot.handle_message(FakeUpdate(one_word), None))
+        self.assertIn("A photo is waiting", one_word.replies[-1][0])
+        self.assertEqual(bot.photo_pending[5]["recipient"], "Robin Other, Receptionist")
+        self.assertEqual(self.pst.added, [], "nothing is written until Submit")
+        run(bot.handle_message(FakeUpdate(FakeMessage(text="submit")), None))
+        self.assertEqual({a[1] for a in self.pst.added}, {"Robin Other, Receptionist"})
+
+    def test_old_unsubmitted_photo_is_forgotten(self):
+        msg = FakeMessage(caption="Jane Doe", document=FakeMedia(jpeg("2026:11:10 12:56:31")))
+        run(bot.handle_photo(FakeUpdate(msg), None))
+        bot.photo_pending[5]["created"] -= 3 * 60 * 60
+        late_yes = FakeMessage(text="yes")
+        run(bot.handle_message(FakeUpdate(late_yes), None))
+        self.assertEqual(self.pst.added, [], "a yes three hours later must not apply the old photo")
+        self.assertIn("Nothing waiting to confirm", late_yes.replies[-1][0])
+        q = FakeQuery("ok", msg)
+        run(bot.handle_photo_button(FakeUpdate(query=q), None))
+        self.assertEqual(self.pst.added, [])
+        self.assertIn("finished or expired", q.answers[-1])
 
     def test_photo_as_file_with_caption(self):
         msg = FakeMessage(caption="JANE DOE, INTAKE SPECIALIST", document=FakeMedia(jpeg("2026:11:10 12:56:31")))
@@ -234,8 +291,9 @@ class ChatFlow(unittest.TestCase):
         self.assertIn("Served: JANE DOE, INTAKE SPECIALIST", text)
         self.assertIn("Which jobs should get this? Your open C T Corporation System jobs are all selected.", text)
         self.assertIn("#543 Gamma Holdings: already has a service comment", text)
-        self.assertIn("#545 Late Order Inc.: received after the photo was taken", text)
-        self.assertEqual(buttons(markup), ["✅ #541 Acme Widgets", "✅ #546 Beta LLC", "Submit (2)", "Cancel"])
+        self.assertIn("Not ticked: #545 came into PST after the photo was taken", text)
+        self.assertEqual(buttons(markup), ["✅ #541 Acme Widgets", "⬜ #545 Late Order Inc.", "✅ #546 Beta LLC", "Submit (2)", "Cancel"],
+                         "a job received after the photo is offered, but not ticked")
         self.assertEqual(self.pst.searches, [
             {"ServerSerialNumber": 4, "ServeeAddress1": "C T Corporation System", "SearchPurpose": "UnfinishedJobs"},
             {"ServerSerialNumber": 4, "ServeeAddress1": "CT Corporation System", "SearchPurpose": "UnfinishedJobs"},
@@ -245,7 +303,7 @@ class ChatFlow(unittest.TestCase):
         # Leave #546 out, then confirm.
         q = FakeQuery("t:546", msg)
         run(bot.handle_photo_button(FakeUpdate(query=q), None))
-        self.assertEqual(buttons(q.edits[-1][1])[1:3], ["⬜ #546 Beta LLC", "Submit (1)"])
+        self.assertEqual(buttons(q.edits[-1][1])[2:4], ["⬜ #546 Beta LLC", "Submit (1)"])
         q = FakeQuery("ok", msg)
         run(bot.handle_photo_button(FakeUpdate(query=q), None))
         self.assertEqual(self.pst.added, [(541, "JANE DOE, INTAKE SPECIALIST", "11/10/2026 12:56 pm", True, True)])
@@ -365,3 +423,64 @@ class CommentBoxes(unittest.TestCase):
         self.assertEqual(comment["CommentDateTime"], "11/10/2026 12:56 pm")
         for box in ("IsAffidavit", "IsFieldSheet", "IsStatusReport", "IsInvoice", "IsDiligence", "IsAttempt", "IsReviewed"):
             self.assertIs(comment[box], True, box)
+
+
+class Client(unittest.TestCase):
+    """pst_client: sign in again after a 401, and turn network trouble into PstApiError."""
+
+    def setUp(self):
+        import pst_client
+        self.mod = pst_client
+        self.calls = []
+        self.answers = []
+        self._post, self._request = pst_client.requests.post, pst_client.requests.request
+
+        class Response:
+            def __init__(self, status, body):
+                self.status_code, self._body, self.ok, self.text = status, body, status < 400, ""
+
+            def json(self):
+                if self._body is None:
+                    raise ValueError("not json")
+                return self._body
+
+        self.Response = Response
+
+        def post(url, **kw):
+            self.calls.append(("token", kw.get("timeout")))
+            return Response(200, {"access_token": "t%d" % len(self.calls)})
+
+        def request(method, url, **kw):
+            self.calls.append((method, kw["headers"]["Authorization"], kw.get("timeout")))
+            answer = self.answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        pst_client.requests.post = post
+        pst_client.requests.request = request
+        self.client = pst_client.PstClient("u", "p", "d")
+
+    def tearDown(self):
+        self.mod.requests.post, self.mod.requests.request = self._post, self._request
+
+    def test_signs_in_again_after_401(self):
+        self.answers = [self.Response(401, {}), self.Response(200, {"Jobs": [{"JobNumber": 1}]})]
+        self.assertEqual(self.client.search_jobs(), [{"JobNumber": 1}])
+        self.assertEqual([c[0] for c in self.calls], ["token", "GET", "token", "GET"])
+        self.assertNotEqual(self.calls[1][1], self.calls[3][1], "the retry uses the new sign-in")
+        self.assertTrue(all(c[-1] == 30 for c in self.calls), "every call has a time limit")
+
+    def test_network_trouble_is_a_pst_error(self):
+        self.answers = [self.mod.requests.ConnectionError("down")]
+        with self.assertRaises(self.mod.PstApiError) as caught:
+            self.client.get_comments(5)
+        self.assertIn("could not reach PST", str(caught.exception))
+
+    def test_refusal_and_junk_answers(self):
+        self.answers = [self.Response(200, {"IsSuccess": False, "TransactionErrors": ["bad field"]}), self.Response(502, None)]
+        with self.assertRaises(self.mod.PstApiError):
+            self.client.update_job({"Job": {}})
+        with self.assertRaises(self.mod.PstApiError) as caught:
+            self.client.get_servees(5)
+        self.assertIn("HTTP 502", str(caught.exception))
