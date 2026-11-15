@@ -19,6 +19,8 @@ import requests
 SITE = os.environ.get("SERVECT_SITE_URL", "https://servect.net").rstrip("/")
 PATH = "/wp-json/servect/v1/dispatch-served"
 TIMEOUT = 20
+# HostGator's ModSecurity answers 406 to the default "python-requests" User-Agent.
+USER_AGENT = "ServeCT-Dispatch/1.0 (Raspberry Pi)"
 
 
 def signed_request(body, token, now=None):
@@ -26,7 +28,7 @@ def signed_request(body, token, now=None):
     raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
     ts = str(int(now if now is not None else time.time()))
     sig = hmac.new(token.encode("utf-8"), ts.encode("ascii") + b"." + raw, hashlib.sha256).hexdigest()
-    return {"Content-Type": "application/json", "X-ServeCT-Timestamp": ts, "X-ServeCT-Signature": sig}, raw
+    return {"Content-Type": "application/json", "User-Agent": USER_AGENT, "X-ServeCT-Timestamp": ts, "X-ServeCT-Signature": sig}, raw
 
 
 def report_served(job_numbers, served_at, recipient, location, token=None):
@@ -45,6 +47,8 @@ def report_served(job_numbers, served_at, recipient, location, token=None):
         response = requests.post(SITE + PATH, data=raw, headers=headers, timeout=TIMEOUT)
     except requests.RequestException as exc:
         raise WebsiteSyncError(f"could not reach servect.net ({type(exc).__name__})") from exc
+    if response.status_code == 406:
+        raise WebsiteSyncError("servect.net's firewall blocked the request (HTTP 406)")
     if response.status_code in (401, 403):
         raise WebsiteSyncError("servect.net refused the update (website plugin 1.7.0 or newer needed, with Telegram alerts on)")
     try:

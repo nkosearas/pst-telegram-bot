@@ -20,6 +20,7 @@ class Signing(unittest.TestCase):
         body = {"job_ids": ["2026000552"], "served_at": "2026-11-14T12:56:00-08:00", "recipient": "PAT EXAMPLE, INTAKE SPECIALIST", "location": "C T Corporation System"}
         headers, raw = website_sync.signed_request(body, "synthetic-bot-token", now=1794700000)
         self.assertEqual(headers["X-ServeCT-Timestamp"], "1794700000")
+        self.assertEqual(headers["User-Agent"], "ServeCT-Dispatch/1.0 (Raspberry Pi)", "the site firewall blocks python-requests")
         expected = hmac.new(b"synthetic-bot-token", b"1794700000." + raw, hashlib.sha256).hexdigest()
         self.assertEqual(headers["X-ServeCT-Signature"], expected, "PHP: hash_hmac('sha256', ts . '.' . body, token)")
         self.assertEqual(json.loads(raw), body)
