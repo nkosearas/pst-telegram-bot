@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+import agents
 from locations import load_locations
 from message_parser import ParseError, parse_message
 import photo_service
@@ -46,8 +47,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         "Ready.\n\n"
-        "After serving at C T Corporation: send the photo you took there, with the name "
-        "and title as the caption, e.g. JANE DOE, INTAKE SPECIALIST.\n"
+        "After serving at C T Corporation: send the photo you took there. I'll show the "
+        "C T intake staff as buttons; tap who you served. Serving someone not on the list? "
+        "Type the name and title instead (or put them in the caption), e.g. JANE DOE, INTAKE SPECIALIST.\n"
+        "/names shows the list and its date.\n"
         "Send the photo as a File (paperclip > File) so its own date and time are used; "
         "a normal photo loses them and the bot uses the time you sent it instead.\n\n"
         "The old text format still works too:\n"
@@ -246,9 +249,55 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "address": address,
     }
     if recipient is None:
-        await message.reply_text("Got the photo. Who did you serve? Send the name and title, e.g. JANE DOE, INTAKE SPECIALIST")
+        await _ask_who(chat_id, message.reply_text)
         return
     await _show_photo_summary(chat_id, message.reply_text)
+
+
+# ---------------------------------------------------------------- who was served
+
+def _name_keyboard(names):
+    """Two names per row; callback "n:<index>" into the names shown."""
+    rows, row = [], []
+    for i, name in enumerate(names):
+        row.append(InlineKeyboardButton(name.title()[:30], callback_data=f"n:{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("Cancel", callback_data="x")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _ask_who(chat_id, reply):
+    listed = agents.load()
+    pending = photo_pending[chat_id]
+    pending["names"] = agents.ordered(listed["names"], agents.load_usage())
+    if not pending["names"]:
+        await reply("Got the photo. Who did you serve? Send the name and title, e.g. JANE DOE, INTAKE SPECIALIST")
+        return
+    lines = ["Got the photo. Who did you serve? Tap a name.",
+             "Someone else? Just type their name and title, e.g. JANE DOE, INTAKE SPECIALIST"]
+    note = agents.age_note(listed["updated"])
+    if note:
+        lines.append("⚠️ " + note)
+    await reply("\n".join(lines), reply_markup=_name_keyboard(pending["names"]))
+
+
+async def names_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_authorized(update):
+        return
+    listed = agents.load()
+    if not listed["names"]:
+        await update.message.reply_text("No C T name list on the Pi yet (ct_agents.json). Ask Claude to add it.")
+        return
+    lines = [f"C T Corporation authorized employees ({len(listed['names'])}), list from {listed['updated'] or 'unknown date'}:"]
+    lines += ["  " + n.title() for n in sorted(listed["names"], key=str.upper)]
+    note = agents.age_note(listed["updated"])
+    if note:
+        lines += ["", note]
+    await update.message.reply_text("\n".join(lines))
 
 
 def _photo_summary(pending):
@@ -305,11 +354,27 @@ async def handle_photo_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     chat_id = update.effective_chat.id
     pending = photo_pending.get(chat_id)
-    if pending is None or pending["recipient"] is None:
+    data = query.data or ""
+    if pending is not None and pending["recipient"] is None and data.startswith("n:"):
+        names = pending.get("names") or []
+        index = int(data[2:]) if data[2:].isdigit() else -1
+        if not 0 <= index < len(names):
+            await query.answer("That list is out of date. Send the photo again.")
+            return
+        name = names[index]
+        pending["recipient"] = agents.recipient_for(name)
+        try:
+            agents.record_pick(name)
+        except OSError:
+            logger.warning("Could not save the name pick count")
+        await query.answer(name.title())
+        await query.edit_message_text(f"Served: {pending['recipient']}")
+        await _show_photo_summary(chat_id, query.message.reply_text)
+        return
+    if pending is None or (pending["recipient"] is None and data != "x"):
         await query.answer("This one is finished or expired. Send the photo again.")
         await query.edit_message_reply_markup(None)
         return
-    data = query.data or ""
     if data == "x":
         photo_pending.pop(chat_id, None)
         await query.answer("Cancelled")
@@ -328,6 +393,8 @@ async def handle_photo_button(update: Update, context: ContextTypes.DEFAULT_TYPE
             pending["selected"].add(number)
         await query.answer()
         await query.edit_message_text(_photo_summary(pending), reply_markup=_photo_keyboard(pending))
+        return
+    await query.answer()
 
 
 async def _apply_photo_service(chat_id, reply):
@@ -373,6 +440,7 @@ def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("names", names_command))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE | filters.Document.FileExtension("heic"), handle_photo))
     app.add_handler(CallbackQueryHandler(handle_photo_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

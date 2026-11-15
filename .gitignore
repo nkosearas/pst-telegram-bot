@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+ct_agents.json
+ct_agents_usage.json
+*.tmp
