@@ -12,6 +12,7 @@ from locations import load_locations
 from message_parser import ParseError, parse_message
 import photo_service
 from pst_client import PstApiError, PstClient
+import website_sync
 
 load_dotenv()
 
@@ -478,6 +479,15 @@ async def _apply_photo_service(chat_id, reply):
         if comment_only:
             lines.append("Comment only (job already has a served person, or no name): " + ", ".join(f"#{n}" for n in comment_only))
         lines.append("Close the job(s) and make the proof in WebPST when you're back at your computer.")
+        # Website orders: show Served on the client's tracking page. Never undoes the PST update.
+        try:
+            results = website_sync.report_served(updated, pending["served_at"], pending["recipient"], pending.get("location") or "C T Corporation System")
+            lines.append(website_sync.summary(results))
+        except website_sync.WebsiteSyncError as exc:
+            lines.append(f"Website tracking not updated: {exc}. Set Served in ServeCT Orders if it's a website order.")
+        except Exception:
+            logger.exception("Website sync failed")
+            lines.append("Website tracking not updated (unexpected error). Set Served in ServeCT Orders if it's a website order.")
     if failed:
         lines.append("FAILED (not updated): " + ", ".join(f"#{n} ({err})" for n, err in failed))
     await reply("\n".join(lines) if lines else "Nothing was updated.")

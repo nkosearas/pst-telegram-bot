@@ -228,6 +228,8 @@ class ChatFlow(unittest.TestCase):
         bot.pst = self.pst
         bot.photo_pending.clear()
         bot.pending_confirmations.clear()
+        # Never contact servect.net from tests.
+        bot.website_sync.report_served = lambda *a, **k: {}
         # No name list unless a test makes one: the real one on the Pi must never leak into tests.
         self.dir = tempfile.mkdtemp()
         agents.AGENTS_FILE = os.path.join(self.dir, "ct_agents.json")
